@@ -1,3 +1,6 @@
+/*
+node 代表内存中的一个B+树节点，是磁盘中反序列化后的 page
+*/
 package bbolt
 
 import (
@@ -9,18 +12,19 @@ import (
 
 // node represents an in-memory, deserialized page.
 type node struct {
-	bucket     *Bucket
-	isLeaf     bool
-	unbalanced bool
-	spilled    bool
-	key        []byte
-	pgid       pgid
-	parent     *node
-	children   nodes
-	inodes     inodes
+	bucket     *Bucket //所属的bucket
+	isLeaf     bool    // 是否是叶子节点
+	unbalanced bool    // 节点是否需要重平衡
+	spilled    bool    //节点是否分裂
+	key        []byte  // 最开始的key
+	pgid       pgid    // 对应的page id
+	parent     *node   // 父节点
+	children   nodes   // 子节点
+	inodes     inodes  // k-v数据
 }
 
 // root returns the top-level node this node is attached to.
+// 返回根节点
 func (n *node) root() *node {
 	if n.parent == nil {
 		return n
@@ -37,6 +41,7 @@ func (n *node) minKeys() int {
 }
 
 // size returns the size of the node after serialization.
+// 返回序列化之后的大小
 func (n *node) size() int {
 	sz, elsz := pageHeaderSize, n.pageElementSize()
 	for i := 0; i < len(n.inodes); i++ {
@@ -113,6 +118,7 @@ func (n *node) prevSibling() *node {
 }
 
 // put inserts a key/value.
+// 插入k-v数据
 func (n *node) put(oldKey, newKey, value []byte, pgid pgid, flags uint32) {
 	if pgid >= n.bucket.tx.meta.pgid {
 		panic(fmt.Sprintf("pgid (%d) above high water mark (%d)", pgid, n.bucket.tx.meta.pgid))
@@ -123,6 +129,7 @@ func (n *node) put(oldKey, newKey, value []byte, pgid pgid, flags uint32) {
 	}
 
 	// Find insertion index.
+	// 找到插入位置
 	index := sort.Search(len(n.inodes), func(i int) bool { return bytes.Compare(n.inodes[i].key, oldKey) != -1 })
 
 	// Add capacity and shift nodes if we don't have an exact match and need to insert.
@@ -131,7 +138,7 @@ func (n *node) put(oldKey, newKey, value []byte, pgid pgid, flags uint32) {
 		n.inodes = append(n.inodes, inode{})
 		copy(n.inodes[index+1:], n.inodes[index:])
 	}
-
+	// 赋值给inode
 	inode := &n.inodes[index]
 	inode.flags = flags
 	inode.key = newKey
@@ -141,6 +148,7 @@ func (n *node) put(oldKey, newKey, value []byte, pgid pgid, flags uint32) {
 }
 
 // del removes a key from the node.
+// 从节点删除
 func (n *node) del(key []byte) {
 	// Find index of key.
 	index := sort.Search(len(n.inodes), func(i int) bool { return bytes.Compare(n.inodes[i].key, key) != -1 })
@@ -151,18 +159,21 @@ func (n *node) del(key []byte) {
 	}
 
 	// Delete inode from the node.
+	// 移除index所在的位置
 	n.inodes = append(n.inodes[:index], n.inodes[index+1:]...)
 
 	// Mark the node as needing rebalancing.
+	// 需要重平衡
 	n.unbalanced = true
 }
 
 // read initializes the node from a page.
+// 从 page 转换为 node，初始化
 func (n *node) read(p *page) {
 	n.pgid = p.id
 	n.isLeaf = ((p.flags & leafPageFlag) != 0)
 	n.inodes = make(inodes, int(p.count))
-
+	// 循环读入
 	for i := 0; i < int(p.count); i++ {
 		inode := &n.inodes[i]
 		if n.isLeaf {
@@ -188,6 +199,7 @@ func (n *node) read(p *page) {
 }
 
 // write writes the items onto one or more pages.
+// 从 node 转换为 page
 func (n *node) write(p *page) {
 	// Initialize page.
 	if n.isLeaf {
@@ -209,6 +221,7 @@ func (n *node) write(p *page) {
 	// Loop over each item and write it to the page.
 	// off tracks the offset into p of the start of the next data.
 	off := unsafe.Sizeof(*p) + n.pageElementSize()*uintptr(len(n.inodes))
+	// 循环写入每个inode
 	for i, item := range n.inodes {
 		_assert(len(item.key) > 0, "write: zero-length inode key")
 
@@ -216,9 +229,11 @@ func (n *node) write(p *page) {
 		// byte pointer for next iteration.
 		sz := len(item.key) + len(item.value)
 		b := unsafeByteSlice(unsafe.Pointer(p), off, 0, sz)
+		// 找到位置 offset
 		off += uintptr(sz)
 
 		// Write the page element.
+		// 根据不同类型写入
 		if n.isLeaf {
 			elem := p.leafPageElement(uint16(i))
 			elem.pos = uint32(uintptr(unsafe.Pointer(&b[0])) - uintptr(unsafe.Pointer(elem)))

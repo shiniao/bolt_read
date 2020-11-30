@@ -1,3 +1,8 @@
+/*
+page 代表由记录组成的数据页，也是B+树中的一个节点，是实际磁盘存储中的结构
+对应的内存中结构为node
+*/
+
 package bbolt
 
 import (
@@ -6,12 +11,13 @@ import (
 	"sort"
 	"unsafe"
 )
-
+// 页头大小
 const pageHeaderSize = unsafe.Sizeof(page{})
 
 const minKeysPerPage = 2
-
+// branch节点大小
 const branchPageElementSize = unsafe.Sizeof(branchPageElement{})
+// 叶子节点大小
 const leafPageElementSize = unsafe.Sizeof(leafPageElement{})
 
 const (
@@ -26,12 +32,12 @@ const (
 )
 
 type pgid uint64
-
+// page 数据页
 type page struct {
-	id       pgid
-	flags    uint16
-	count    uint16
-	overflow uint32
+	id       pgid   // page id
+	flags    uint16 // 区分不同类型的page（四种：branch、leaf、mata、freelist）
+	count    uint16 // 统计 page 中数据大小
+	overflow uint32 // 存满了，指向新的page
 }
 
 // typ returns a human readable page type string used for debugging.
@@ -48,12 +54,15 @@ func (p *page) typ() string {
 	return fmt.Sprintf("unknown<%02x>", p.flags)
 }
 
-// meta returns a pointer to the metadata section of the page.
+// meta returns a pointer to the metadata section of the page.f
+// 元数据地址
 func (p *page) meta() *meta {
 	return (*meta)(unsafeAdd(unsafe.Pointer(p), unsafe.Sizeof(*p)))
+	// return (*meta)(unsafe.Pointer(uintptr(unsafe.Pointer(p)) + unsafe.Sizeof(*p)))
 }
 
 // leafPageElement retrieves the leaf node by index
+// 叶子节点地址
 func (p *page) leafPageElement(index uint16) *leafPageElement {
 	return (*leafPageElement)(unsafeIndex(unsafe.Pointer(p), unsafe.Sizeof(*p),
 		leafPageElementSize, int(index)))
@@ -100,10 +109,11 @@ func (s pages) Swap(i, j int)      { s[i], s[j] = s[j], s[i] }
 func (s pages) Less(i, j int) bool { return s[i].id < s[j].id }
 
 // branchPageElement represents a node on a branch page.
+// 根节点元素
 type branchPageElement struct {
-	pos   uint32
-	ksize uint32
-	pgid  pgid
+	pos   uint32 // 位置
+	ksize uint32 // 大小
+	pgid  pgid // 页id
 }
 
 // key returns a byte slice of the node key.
@@ -112,6 +122,7 @@ func (n *branchPageElement) key() []byte {
 }
 
 // leafPageElement represents a node on a leaf page.
+// 叶子节点元素
 type leafPageElement struct {
 	flags uint32
 	pos   uint32

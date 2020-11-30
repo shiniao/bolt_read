@@ -10,6 +10,7 @@ import (
 )
 
 // flock acquires an advisory lock on a file descriptor.
+// 给db文件描述符加锁
 func flock(db *DB, exclusive bool, timeout time.Duration) error {
 	var t time.Time
 	if timeout != 0 {
@@ -24,6 +25,7 @@ func flock(db *DB, exclusive bool, timeout time.Duration) error {
 	}
 	for {
 		// Attempt to obtain an exclusive lock.
+		// 获取排他锁
 		err := syscall.Flock(int(fd), flag)
 		if err == nil {
 			return nil

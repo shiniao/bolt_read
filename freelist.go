@@ -19,15 +19,22 @@ type pidSet map[pgid]struct{}
 
 // freelist represents a list of all pages that are available for allocation.
 // It also tracks pages that have been freed but are still in use by open transactions.
+// free链表示空闲的page
 type freelist struct {
+	// 类型 包括array和hashmap
 	freelistType   FreelistType                // freelist type
+	// freelist中所有page的id
 	ids            []pgid                      // all free and available free page ids.
+	// 每个page id 分配的事务id
 	allocs         map[pgid]txid               // mapping of txid that allocated a pgid.
+	// 即将被事务释放的page id
 	pending        map[txid]*txPending         // mapping of soon-to-be free page ids by tx.
 	cache          map[pgid]bool               // fast lookup of all free and pending page ids.
+	// 
 	freemaps       map[uint64]pidSet           // key is the size of continuous pages(span), value is a set which contains the starting pgids of same size
 	forwardMap     map[pgid]uint64             // key is start pgid, value is its span size
 	backwardMap    map[pgid]uint64             // key is end pgid, value is its span size
+	// 分配free page 的 function
 	allocate       func(txid txid, n int) pgid // the freelist allocate func
 	free_count     func() int                  // the function which gives you free page number
 	mergeSpans     func(ids pgids)             // the mergeSpan func
@@ -123,6 +130,7 @@ func (f *freelist) arrayAllocate(txid txid, n int) pgid {
 		}
 
 		// If we found a contiguous block then remove it and return it.
+		// 找到邻近的free page， 从freelist中移除，然后返回
 		if (id-initial)+1 == pgid(n) {
 			// If we're allocating off the beginning then take the fast path
 			// and just adjust the existing slice. This will use extra memory
@@ -150,6 +158,7 @@ func (f *freelist) arrayAllocate(txid txid, n int) pgid {
 
 // free releases a page and its overflow for a given transaction id.
 // If the page is already free then a panic will occur.
+// 释放一个不用的page，加入到freelist
 func (f *freelist) free(txid txid, p *page) {
 	if p.id <= 1 {
 		panic(fmt.Sprintf("cannot free page 0 or 1: %d", p.id))
@@ -163,6 +172,7 @@ func (f *freelist) free(txid txid, p *page) {
 	}
 	allocTxid, ok := f.allocs[p.id]
 	if ok {
+		// 删除对应的元素
 		delete(f.allocs, p.id)
 	} else if (p.flags & freelistPageFlag) != 0 {
 		// Freelist is always allocated by prior tx.

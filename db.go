@@ -38,6 +38,7 @@ const (
 )
 
 // default page size for db is set to the OS page size.
+// 默认page大小是操作系统的页大小
 var defaultPageSize = os.Getpagesize()
 
 // The time elapsed between consecutive file locking attempts.
@@ -56,6 +57,7 @@ const (
 // DB represents a collection of buckets persisted to a file on disk.
 // All data access is performed through transactions which can be obtained through the DB.
 // All the functions on DB will return a ErrDatabaseNotOpen if accessed before Open() is called.
+// DB是一系列buckets的集合，每个db一个文件
 type DB struct {
 	// When enabled, the database will perform a Check() after every commit.
 	// A panic is issued if the database is in an inconsistent state. This
@@ -120,8 +122,8 @@ type DB struct {
 	// of truncate() and fsync() when growing the data file.
 	AllocSize int
 
-	path     string
-	openFile func(string, int, os.FileMode) (*os.File, error)
+	path     string                                           // db路径
+	openFile func(string, int, os.FileMode) (*os.File, error) // file func
 	file     *os.File
 	dataref  []byte // mmap'ed readonly, write throws SEGV
 	data     *[maxMapSize]byte
@@ -131,11 +133,11 @@ type DB struct {
 	meta1    *meta
 	pageSize int
 	opened   bool
-	rwtx     *Tx
-	txs      []*Tx
+	rwtx     *Tx   // 读写事务集合
+	txs      []*Tx // 事务集合
 	stats    Stats
 
-	freelist     *freelist
+	freelist     *freelist // freelist
 	freelistLoad sync.Once
 
 	pagePool sync.Pool
@@ -154,7 +156,7 @@ type DB struct {
 
 	// Read only mode.
 	// When true, Update() and Begin(true) return ErrDatabaseReadOnly immediately.
-	readOnly bool
+	readOnly bool // 只读模式
 }
 
 // Path returns the path to currently open database file.
@@ -175,6 +177,8 @@ func (db *DB) String() string {
 // Open creates and opens a database at the given path.
 // If the file does not exist then it will be created automatically.
 // Passing in nil options will cause Bolt to open the database with the default options.
+// Open 打开数据库
+// 1. 配置 2.db文件上锁（如果读写） 3. 初始化db
 func Open(path string, mode os.FileMode, options *Options) (*DB, error) {
 	db := &DB{
 		opened: true,
@@ -183,6 +187,7 @@ func Open(path string, mode os.FileMode, options *Options) (*DB, error) {
 	if options == nil {
 		options = DefaultOptions
 	}
+	// 配置
 	db.NoSync = options.NoSync
 	db.NoGrowSync = options.NoGrowSync
 	db.MmapFlags = options.MmapFlags
@@ -220,6 +225,7 @@ func Open(path string, mode os.FileMode, options *Options) (*DB, error) {
 	// if !options.ReadOnly.
 	// The database file is locked using the shared lock (more than one process may
 	// hold a lock at the same time) otherwise (options.ReadOnly is set).
+	// 如果可读可写，锁定数据库文件，控制每次只能有一个进程写（给文件加了一个排他锁）
 	if err := flock(db, !db.readOnly, options.Timeout); err != nil {
 		_ = db.close()
 		return nil, err
@@ -237,13 +243,16 @@ func Open(path string, mode os.FileMode, options *Options) (*DB, error) {
 	if info, err := db.file.Stat(); err != nil {
 		_ = db.close()
 		return nil, err
+		// 如果是新的文件，db init
 	} else if info.Size() == 0 {
 		// Initialize new files with meta pages.
+		// 初始化：分配meta page、freelist、B+tree
 		if err := db.init(); err != nil {
 			// clean up file descriptor on initialization fail
 			_ = db.close()
 			return nil, err
 		}
+		// 如果该数据库文件已经存在，读里面的信息
 	} else {
 		// Read the first meta page to determine the page size.
 		var buf [0x1000]byte
@@ -256,6 +265,8 @@ func Open(path string, mode os.FileMode, options *Options) (*DB, error) {
 		// are out of luck and cannot access the database.
 		//
 		// TODO: scan for next page
+
+		// 获取 page 大小
 		if bw, err := db.file.ReadAt(buf[:], 0); err == nil && bw == len(buf) {
 			if m := db.pageInBuffer(buf[:], 0).meta(); m.validate() == nil {
 				db.pageSize = int(m.pageSize)
@@ -267,6 +278,7 @@ func Open(path string, mode os.FileMode, options *Options) (*DB, error) {
 	}
 
 	// Initialize page pool.
+	// 初始化 page 池
 	db.pagePool = sync.Pool{
 		New: func() interface{} {
 			return make([]byte, db.pageSize)
@@ -274,6 +286,7 @@ func Open(path string, mode os.FileMode, options *Options) (*DB, error) {
 	}
 
 	// Memory map the data file.
+	// 映射db file到内存
 	if err := db.mmap(options.InitialMmapSize); err != nil {
 		_ = db.close()
 		return nil, err
@@ -305,7 +318,9 @@ func Open(path string, mode os.FileMode, options *Options) (*DB, error) {
 // loadFreelist reads the freelist if it is synced, or reconstructs it
 // by scanning the DB if it is not synced. It assumes there are no
 // concurrent accesses being made to the freelist.
+// 加载free list
 func (db *DB) loadFreelist() {
+	// sync.Once
 	db.freelistLoad.Do(func() {
 		db.freelist = newFreelist(db.FreelistType)
 		if !db.hasSyncedFreelist() {
@@ -325,6 +340,7 @@ func (db *DB) hasSyncedFreelist() bool {
 
 // mmap opens the underlying memory-mapped file and initializes the meta references.
 // minsz is the minimum size that the new mmap can be.
+// mmap将磁盘上的db文件加载到内存，利用操作系统madvise(MADV_RANDOM)管理 page cache
 func (db *DB) mmap(minsz int) error {
 	db.mmaplock.Lock()
 	defer db.mmaplock.Unlock()
@@ -341,6 +357,7 @@ func (db *DB) mmap(minsz int) error {
 	if size < minsz {
 		size = minsz
 	}
+	// mmapSize控制内存中缓存的大小
 	size, err = db.mmapSize(size)
 	if err != nil {
 		return err
@@ -357,6 +374,7 @@ func (db *DB) mmap(minsz int) error {
 	}
 
 	// Memory-map the data file as a byte slice.
+	// 映射db文件到内存
 	if err := mmap(db, size); err != nil {
 		return err
 	}
@@ -423,9 +441,12 @@ func (db *DB) mmapSize(size int) (int, error) {
 }
 
 // init creates a new database file and initializes its meta pages.
+// 初始化db file
 func (db *DB) init() error {
 	// Create two meta pages on a buffer.
+	// 创建4个page大小的buffer
 	buf := make([]byte, db.pageSize*4)
+	// 创建两个meta page
 	for i := 0; i < 2; i++ {
 		p := db.pageInBuffer(buf[:], pgid(i))
 		p.id = pgid(i)
@@ -444,21 +465,25 @@ func (db *DB) init() error {
 	}
 
 	// Write an empty freelist at page 3.
+	// 在page 3 创建空的 free list
 	p := db.pageInBuffer(buf[:], pgid(2))
 	p.id = pgid(2)
 	p.flags = freelistPageFlag
 	p.count = 0
 
 	// Write an empty leaf page at page 4.
+	// 剩下的放B+树节点
 	p = db.pageInBuffer(buf[:], pgid(3))
 	p.id = pgid(3)
 	p.flags = leafPageFlag
 	p.count = 0
 
 	// Write the buffer to our data file.
+	// 将 buffer 写入数据文件
 	if _, err := db.ops.writeAt(buf, 0); err != nil {
 		return err
 	}
+	// 写入db
 	if err := fdatasync(db); err != nil {
 		return err
 	}
@@ -537,22 +562,25 @@ func (db *DB) close() error {
 //
 // IMPORTANT: You must close read-only transactions after you are finished or
 // else the database will not reclaim old pages.
+// 开始事务，一次只能有一个写事务
 func (db *DB) Begin(writable bool) (*Tx, error) {
 	if writable {
 		return db.beginRWTx()
 	}
 	return db.beginTx()
 }
-
+// 开启只读事务
 func (db *DB) beginTx() (*Tx, error) {
 	// Lock the meta pages while we initialize the transaction. We obtain
 	// the meta lock before the mmap lock because that's the order that the
 	// write transaction will obtain them.
+	//
 	db.metalock.Lock()
 
 	// Obtain a read-only lock on the mmap. When the mmap is remapped it will
 	// obtain a write lock so all transactions must finish before it can be
 	// remapped.
+	// 加读锁
 	db.mmaplock.RLock()
 
 	// Exit if the database is not open yet.
@@ -563,10 +591,14 @@ func (db *DB) beginTx() (*Tx, error) {
 	}
 
 	// Create a transaction associated with the database.
+
+	// 初始化事务
 	t := &Tx{}
 	t.init(db)
 
 	// Keep track of transaction until it closes.
+
+	// 每开启一个事务都会加入 txs 的集合
 	db.txs = append(db.txs, t)
 	n := len(db.txs)
 
@@ -574,14 +606,17 @@ func (db *DB) beginTx() (*Tx, error) {
 	db.metalock.Unlock()
 
 	// Update the transaction stats.
+	// 数据库统计信息更新
 	db.statlock.Lock()
+	// 读事务的个数 +1
 	db.stats.TxN++
+	// 事务开启格式
 	db.stats.OpenTxN = n
 	db.statlock.Unlock()
 
 	return t, nil
 }
-
+// 开启读写事务
 func (db *DB) beginRWTx() (*Tx, error) {
 	// If the database was opened with Options.ReadOnly, return an error.
 	if db.readOnly {
@@ -722,6 +757,7 @@ func (db *DB) View(fn func(*Tx) error) error {
 	t.managed = true
 
 	// If an error is returned from the function then pass it through.
+	// 执行事务func
 	err = fn(t)
 	t.managed = false
 	if err != nil {
@@ -881,6 +917,7 @@ func (db *DB) Info() *Info {
 }
 
 // page retrieves a page reference from the mmap based on the current page size.
+// 根据 page id 读取 page
 func (db *DB) page(id pgid) *page {
 	pos := id * pgid(db.pageSize)
 	return (*page)(unsafe.Pointer(&db.data[pos]))
@@ -1069,9 +1106,9 @@ type Options struct {
 // DefaultOptions represent the options used if nil options are passed into Open().
 // No timeout is used which will cause Bolt to wait indefinitely for a lock.
 var DefaultOptions = &Options{
-	Timeout:      0,
+	Timeout:      0, // 获取锁的时候没有超时
 	NoGrowSync:   false,
-	FreelistType: FreelistArrayType,
+	FreelistType: FreelistArrayType, // free list 类型是 array
 }
 
 // Stats represents statistics about the database.

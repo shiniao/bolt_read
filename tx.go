@@ -1,3 +1,5 @@
+// 事务相关实现 MVCC
+
 package bbolt
 
 import (
@@ -11,6 +13,7 @@ import (
 )
 
 // txid represents the internal transaction identifier.
+// 事务id
 type txid uint64
 
 // Tx represents a read-only or read/write transaction on the database.
@@ -21,13 +24,14 @@ type txid uint64
 // them. Pages can not be reclaimed by the writer until no more transactions
 // are using them. A long running read transaction can cause the database to
 // quickly grow.
+// 事务结构
 type Tx struct {
-	writable       bool
+	writable       bool //是否可读
 	managed        bool
-	db             *DB
-	meta           *meta
-	root           Bucket
-	pages          map[pgid]*page
+	db             *DB            // database
+	meta           *meta          // 元数据信息
+	root           Bucket         // 根节点
+	pages          map[pgid]*page // pages
 	stats          TxStats
 	commitHandlers []func()
 
@@ -57,6 +61,7 @@ func (tx *Tx) init(db *DB) {
 	// Increment the transaction id and add a page cache for writable transactions.
 	if tx.writable {
 		tx.pages = make(map[pgid]*page)
+		// 初始化事务id为 1
 		tx.meta.txid += txid(1)
 	}
 }
@@ -157,6 +162,7 @@ func (tx *Tx) Commit() error {
 
 	// spill data onto dirty pages.
 	startTime = time.Now()
+	// 把事务修改过的记录写入脏页
 	if err := tx.root.spill(); err != nil {
 		tx.rollback()
 		return err
@@ -181,6 +187,7 @@ func (tx *Tx) Commit() error {
 	}
 
 	// Write dirty pages to disk.
+	// 将脏页刷入磁盘
 	startTime = time.Now()
 	if err := tx.write(); err != nil {
 		tx.rollback()
@@ -205,6 +212,7 @@ func (tx *Tx) Commit() error {
 	}
 
 	// Write meta to disk.
+	// 将元数据页刷入磁盘
 	if err := tx.writeMeta(); err != nil {
 		tx.rollback()
 		return err
@@ -415,14 +423,20 @@ func (tx *Tx) Check() <-chan error {
 	return ch
 }
 
+// 一致性检查
 func (tx *Tx) check(ch chan error) {
 	// Force loading free list if opened in ReadOnly mode.
+	// 加载 free list
 	tx.db.loadFreelist()
 
 	// Check if any pages are double freed.
 	freed := make(map[pgid]bool)
+	// 该 free list 的所有 page
 	all := make([]pgid, tx.db.freelist.count())
+
+	// 复制当前的 freelist
 	tx.db.freelist.copyall(all)
+	// 遍历当前的free list里面的page，设置为 freed = true
 	for _, id := range all {
 		if freed[id] {
 			ch <- fmt.Errorf("page %d: already freed", id)
@@ -434,6 +448,8 @@ func (tx *Tx) check(ch chan error) {
 	reachable := make(map[pgid]*page)
 	reachable[0] = tx.page(0) // meta0
 	reachable[1] = tx.page(1) // meta1
+
+	// 跟踪每一个可达的 page
 	if tx.meta.freelist != pgidNoFreelist {
 		for i := uint32(0); i <= tx.page(tx.meta.freelist).overflow; i++ {
 			reachable[tx.meta.freelist+pgid(i)] = tx.page(tx.meta.freelist)
@@ -444,6 +460,7 @@ func (tx *Tx) check(ch chan error) {
 	tx.checkBucket(&tx.root, reachable, freed, ch)
 
 	// Ensure all pages below high water mark are either reachable or freed.
+	// 遍历所有的 page， 如果某个 page 不可达或者没有 free，说明不一致
 	for i := pgid(0); i < tx.meta.pgid; i++ {
 		_, isReachable := reachable[i]
 		if !isReachable && !freed[i] {

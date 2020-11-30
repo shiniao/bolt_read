@@ -12,9 +12,15 @@ import (
 )
 
 // TestTx_Check_ReadOnly tests consistency checking on a ReadOnly database.
+// 检查只读的一致性
 func TestTx_Check_ReadOnly(t *testing.T) {
+
+	// 打开数据库写数据
+
 	db := MustOpenDB()
 	defer db.Close()
+
+	// 创建一个bucket和键值对
 	if err := db.Update(func(tx *bolt.Tx) error {
 		b, err := tx.CreateBucket([]byte("widgets"))
 		if err != nil {
@@ -31,12 +37,15 @@ func TestTx_Check_ReadOnly(t *testing.T) {
 		t.Fatal(err)
 	}
 
+	// 打开另外一个只读数据库
 	readOnlyDB, err := bolt.Open(db.f, 0666, &bolt.Options{ReadOnly: true})
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer readOnlyDB.Close()
 
+	// false设置事务只读
+	// 开始事务
 	tx, err := readOnlyDB.Begin(false)
 	if err != nil {
 		t.Fatal(err)
@@ -45,6 +54,7 @@ func TestTx_Check_ReadOnly(t *testing.T) {
 	numChecks := 2
 	errc := make(chan error, numChecks)
 	check := func() {
+		// 一致性检查
 		err, _ := <-tx.Check()
 		errc <- err
 	}
