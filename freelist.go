@@ -21,9 +21,9 @@ type pidSet map[pgid]struct{}
 // It also tracks pages that have been freed but are still in use by open transactions.
 // free链表示空闲的page
 type freelist struct {
-	// 类型 包括array和hashmap
+	// 类型 包括 array和 hashmap
 	freelistType   FreelistType                // freelist type
-	// freelist中所有page的id
+	// freelist中所有 page 的 id
 	ids            []pgid                      // all free and available free page ids.
 	// 每个page id 分配的事务id
 	allocs         map[pgid]txid               // mapping of txid that allocated a pgid.

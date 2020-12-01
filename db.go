@@ -709,8 +709,11 @@ func (db *DB) removeTx(tx *Tx) {
 // returned from the Update() method.
 //
 // Attempting to manually commit or rollback within the function will cause a panic.
+// 读写事务 装饰函数
 func (db *DB) Update(fn func(*Tx) error) error {
+	// 开启事务
 	t, err := db.Begin(true)
+
 	if err != nil {
 		return err
 	}

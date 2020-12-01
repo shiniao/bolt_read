@@ -26,8 +26,8 @@ type txid uint64
 // quickly grow.
 // 事务结构
 type Tx struct {
-	writable       bool //是否可读
-	managed        bool
+	writable       bool           //是否可读
+	managed        bool           //
 	db             *DB            // database
 	meta           *meta          // 元数据信息
 	root           Bucket         // 根节点
@@ -170,10 +170,12 @@ func (tx *Tx) Commit() error {
 	tx.stats.SpillTime += time.Since(startTime)
 
 	// Free the old root bucket.
+	// 释放 bucket的根节点
 	tx.meta.root.root = tx.root.root
 
 	// Free the old freelist because commit writes out a fresh freelist.
 	if tx.meta.freelist != pgidNoFreelist {
+		// 释放page
 		tx.db.freelist.free(tx.meta.txid, tx.db.page(tx.meta.freelist))
 	}
 
