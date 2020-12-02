@@ -8,9 +8,10 @@ import (
 
 // txPending holds a list of pgids and corresponding allocation txns
 // that are pending to be freed.
+// txPending 保存那些被 free（进入 free list）的 page id
 type txPending struct {
-	ids              []pgid
-	alloctx          []txid // txids allocating the ids
+	ids              []pgid // page id
+	alloctx          []txid // txids allocating the ids 分配给 page 的事务 id
 	lastReleaseBegin txid   // beginning txid of last matching releaseRange
 }
 
@@ -19,7 +20,7 @@ type pidSet map[pgid]struct{}
 
 // freelist represents a list of all pages that are available for allocation.
 // It also tracks pages that have been freed but are still in use by open transactions.
-// free链表示空闲的page
+// free链表示空闲的 page
 type freelist struct {
 	// 类型 包括 array和 hashmap
 	freelistType   FreelistType                // freelist type
@@ -27,10 +28,11 @@ type freelist struct {
 	ids            []pgid                      // all free and available free page ids.
 	// 每个page id 分配的事务id
 	allocs         map[pgid]txid               // mapping of txid that allocated a pgid.
-	// 即将被事务释放的page id
+	// 即将被事务释放的 page id
 	pending        map[txid]*txPending         // mapping of soon-to-be free page ids by tx.
+	// 缓存呀
 	cache          map[pgid]bool               // fast lookup of all free and pending page ids.
-	// 
+	
 	freemaps       map[uint64]pidSet           // key is the size of continuous pages(span), value is a set which contains the starting pgids of same size
 	forwardMap     map[pgid]uint64             // key is start pgid, value is its span size
 	backwardMap    map[pgid]uint64             // key is end pgid, value is its span size
@@ -43,6 +45,7 @@ type freelist struct {
 }
 
 // newFreelist returns an empty, initialized freelist.
+// 初始化 free list
 func newFreelist(freelistType FreelistType) *freelist {
 	f := &freelist{
 		freelistType: freelistType,
@@ -72,6 +75,7 @@ func newFreelist(freelistType FreelistType) *freelist {
 }
 
 // size returns the size of the page after serialization.
+// 返回序列化之后的 page 大小
 func (f *freelist) size() int {
 	n := f.count()
 	if n >= 0xFFFF {
@@ -158,34 +162,39 @@ func (f *freelist) arrayAllocate(txid txid, n int) pgid {
 
 // free releases a page and its overflow for a given transaction id.
 // If the page is already free then a panic will occur.
-// 释放一个不用的page，加入到freelist
+// 释放一个不用的 page，加入到 freelist
 func (f *freelist) free(txid txid, p *page) {
 	if p.id <= 1 {
 		panic(fmt.Sprintf("cannot free page 0 or 1: %d", p.id))
 	}
 
 	// Free page and all its overflow pages.
+	// 从待释放列表找到事务对应的 page ids
 	txp := f.pending[txid]
+	// 如果不存在，将事务加入待释放列表
 	if txp == nil {
 		txp = &txPending{}
 		f.pending[txid] = txp
 	}
+	// 找到page对应的事务id
 	allocTxid, ok := f.allocs[p.id]
 	if ok {
-		// 删除对应的元素
+		// 从map中删除对应的page
 		delete(f.allocs, p.id)
 	} else if (p.flags & freelistPageFlag) != 0 {
 		// Freelist is always allocated by prior tx.
 		allocTxid = txid - 1
 	}
-
+	// 遍历当前page id 以及溢出的
 	for id := p.id; id <= p.id+pgid(p.overflow); id++ {
 		// Verify that page is not already free.
 		if f.cache[id] {
 			panic(fmt.Sprintf("page %d already freed", id))
 		}
 		// Add to the freelist and cache.
+		// 将page id加入待释放
 		txp.ids = append(txp.ids, id)
+		// 将事务id加入待释放
 		txp.alloctx = append(txp.alloctx, allocTxid)
 		f.cache[id] = true
 	}
@@ -318,6 +327,7 @@ func (f *freelist) arrayGetFreePageIDs() []pgid {
 // write writes the page ids onto a freelist page. All free and pending ids are
 // saved to disk since in the event of a program crash, all pending ids will
 // become free.
+// 将 page 写入 free list
 func (f *freelist) write(p *page) error {
 	// Combine the old free pgids and pgids waiting on an open transaction.
 

@@ -28,10 +28,15 @@ const DefaultFillPercent = 0.5
 // Bucket represents a collection of key/value pairs inside the database.
 type Bucket struct {
 	*bucket
+	// * 关联的事务
 	tx       *Tx                // the associated transaction
+	// * sub bucket
 	buckets  map[string]*Bucket // subbucket cache
+	// * 对应的的page
 	page     *page              // inline page reference
+	// * 根节点
 	rootNode *node              // materialized node for the root page.
+	// * 包含的所有node
 	nodes    map[pgid]*node     // node cache
 
 	// Sets the threshold for filling nodes when they split. By default,
@@ -39,6 +44,7 @@ type Bucket struct {
 	// amount if you know that your write workloads are mostly append-only.
 	//
 	// This is non-persisted across transactions so it must be set in every Tx.
+	// * 设置 node 拆分时候的阈值
 	FillPercent float64
 }
 
@@ -47,11 +53,13 @@ type Bucket struct {
 // then its root page can be stored inline in the "value", after the bucket
 // header. In the case of inline buckets, the "root" will be 0.
 type bucket struct {
+	// * 树根节点
 	root     pgid   // page id of the bucket's root-level page
 	sequence uint64 // monotonically incrementing, used by NextSequence()
 }
 
 // newBucket returns a new bucket associated with a transaction.
+// * 根据事务分配 bucket
 func newBucket(tx *Tx) Bucket {
 	var b = Bucket{tx: tx, FillPercent: DefaultFillPercent}
 	if tx.writable {
@@ -93,8 +101,10 @@ func (b *Bucket) Cursor() *Cursor {
 // Bucket retrieves a nested bucket by name.
 // Returns nil if the bucket does not exist.
 // The bucket instance is only valid for the lifetime of the transaction.
+// * 查询bucket
 func (b *Bucket) Bucket(name []byte) *Bucket {
 	if b.buckets != nil {
+		// * 看看子 bucket 有没有
 		if child := b.buckets[string(name)]; child != nil {
 			return child
 		}
@@ -102,6 +112,7 @@ func (b *Bucket) Bucket(name []byte) *Bucket {
 
 	// Move cursor to key.
 	c := b.Cursor()
+	// * 游标找到位置
 	k, v, flags := c.seek(name)
 
 	// Return nil if the key doesn't exist or it is not a bucket.
@@ -110,6 +121,7 @@ func (b *Bucket) Bucket(name []byte) *Bucket {
 	}
 
 	// Otherwise create a bucket and cache it.
+	// * 有的话，打开这个bucket
 	var child = b.openBucket(v)
 	if b.buckets != nil {
 		b.buckets[string(name)] = child
@@ -120,7 +132,9 @@ func (b *Bucket) Bucket(name []byte) *Bucket {
 
 // Helper method that re-interprets a sub-bucket value
 // from a parent into a Bucket
+// * 打开 Bucket
 func (b *Bucket) openBucket(value []byte) *Bucket {
+	// * 新建一个bucket
 	var child = newBucket(b.tx)
 
 	// Unaligned access requires a copy to be made.
@@ -128,6 +142,7 @@ func (b *Bucket) openBucket(value []byte) *Bucket {
 		bucket
 		page
 	}{}) - 1
+	// ? 如果内存地址没对齐，复制value
 	unaligned := uintptr(unsafe.Pointer(&value[0]))&unalignedMask != 0
 	if unaligned {
 		value = cloneBytes(value)
@@ -258,6 +273,7 @@ func (b *Bucket) DeleteBucket(key []byte) error {
 // Get retrieves the value for a key in the bucket.
 // Returns a nil value if the key does not exist or if the key is a nested bucket.
 // The returned value is only valid for the life of the transaction.
+// * 从 bucket 获取 k-v
 func (b *Bucket) Get(key []byte) []byte {
 	k, v, flags := b.Cursor().seek(key)
 
@@ -277,6 +293,7 @@ func (b *Bucket) Get(key []byte) []byte {
 // If the key exist then its previous value will be overwritten.
 // Supplied value must remain valid for the life of the transaction.
 // Returns an error if the bucket was created from a read-only transaction, if the key is blank, if the key is too large, or if the value is too large.
+// * 把键值对写入 bucket
 func (b *Bucket) Put(key []byte, value []byte) error {
 	if b.tx.db == nil {
 		return ErrTxClosed
@@ -292,6 +309,7 @@ func (b *Bucket) Put(key []byte, value []byte) error {
 
 	// Move cursor to correct position.
 	c := b.Cursor()
+	// * 先找找有没有这个东西
 	k, _, flags := c.seek(key)
 
 	// Return an error if there is an existing key with a bucket value.
@@ -300,6 +318,7 @@ func (b *Bucket) Put(key []byte, value []byte) error {
 	}
 
 	// Insert into node.
+	// * 没有的话找到 node 位置插入
 	key = cloneBytes(key)
 	c.node().put(key, key, value, 0, 0)
 
@@ -523,6 +542,7 @@ func (b *Bucket) _forEachPageNode(pgid pgid, depth int, fn func(*page, *node, in
 }
 
 // spill writes all the nodes for this bucket to dirty pages.
+// * 将 Buket 中的所有 node 写入脏页
 func (b *Bucket) spill() error {
 	// Spill all child buckets first.
 	for name, child := range b.buckets {

@@ -102,6 +102,9 @@ func (p *page) hexdump(n int) {
 	fmt.Fprintf(os.Stderr, "%x\n", buf)
 }
 
+// pages 实现了 sort.Sort 接口
+// 所以可以对page进行排序
+
 type pages []*page
 
 func (s pages) Len() int           { return len(s) }

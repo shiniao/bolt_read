@@ -709,7 +709,8 @@ func (db *DB) removeTx(tx *Tx) {
 // returned from the Update() method.
 //
 // Attempting to manually commit or rollback within the function will cause a panic.
-// 读写事务 装饰函数
+// 读写事务
+// 类似python中的 "with Open() as f"
 func (db *DB) Update(fn func(*Tx) error) error {
 	// 开启事务
 	t, err := db.Begin(true)
@@ -729,6 +730,8 @@ func (db *DB) Update(fn func(*Tx) error) error {
 	t.managed = true
 
 	// If an error is returned from the function then rollback and return error.
+	
+	// 执行事务操作
 	err = fn(t)
 	t.managed = false
 	if err != nil {
@@ -1150,16 +1153,16 @@ type Info struct {
 	Data     uintptr
 	PageSize int
 }
-
+// db meta信息
 type meta struct {
 	magic    uint32
-	version  uint32
-	pageSize uint32
-	flags    uint32
-	root     bucket
-	freelist pgid
-	pgid     pgid
-	txid     txid
+	version  uint32 // 版本
+	pageSize uint32 // page 大小
+	flags    uint32 // flag
+	root     bucket // 根
+	freelist pgid // free list
+	pgid     pgid // page id
+	txid     txid // 事务 id
 	checksum uint64
 }
 
@@ -1181,7 +1184,9 @@ func (m *meta) copy(dest *meta) {
 }
 
 // write writes the meta onto a page.
+// 将 meta 写入一个 page
 func (m *meta) write(p *page) {
+	
 	if m.root.root >= m.pgid {
 		panic(fmt.Sprintf("root bucket pgid (%d) above high water mark (%d)", m.root.root, m.pgid))
 	} else if m.freelist >= m.pgid && m.freelist != pgidNoFreelist {
@@ -1190,12 +1195,15 @@ func (m *meta) write(p *page) {
 	}
 
 	// Page id is either going to be 0 or 1 which we can determine by the transaction ID.
+	
 	p.id = pgid(m.txid % 2)
+	// 将 page 的 flag 设为 meta page
 	p.flags |= metaPageFlag
 
 	// Calculate the checksum.
 	m.checksum = m.sum64()
 
+	// 复制meta信息到 page 的 meta 信息地址
 	m.copy(p.meta())
 }
 

@@ -162,7 +162,7 @@ func (tx *Tx) Commit() error {
 
 	// spill data onto dirty pages.
 	startTime = time.Now()
-	// 把事务修改过的记录写入脏页
+	// 把事务的 Bukcet 对应的所有 node 写入脏页
 	if err := tx.root.spill(); err != nil {
 		tx.rollback()
 		return err
@@ -175,7 +175,7 @@ func (tx *Tx) Commit() error {
 
 	// Free the old freelist because commit writes out a fresh freelist.
 	if tx.meta.freelist != pgidNoFreelist {
-		// 释放page
+		// 释放 page
 		tx.db.freelist.free(tx.meta.txid, tx.db.page(tx.meta.freelist))
 	}
 
@@ -530,6 +530,7 @@ func (tx *Tx) allocate(count int) (*page, error) {
 }
 
 // write writes any dirty pages to disk.
+// 将脏页刷入磁盘
 func (tx *Tx) write() error {
 	// Sort pages by id.
 	pages := make(pages, 0, len(tx.pages))
@@ -541,8 +542,10 @@ func (tx *Tx) write() error {
 	sort.Sort(pages)
 
 	// Write pages to disk in order.
+	// 开始循环写入啦
 	for _, p := range pages {
 		rem := (uint64(p.overflow) + 1) * uint64(tx.db.pageSize)
+		// 找到写入磁盘的位置
 		offset := int64(p.id) * int64(tx.db.pageSize)
 		var written uintptr
 
@@ -553,12 +556,13 @@ func (tx *Tx) write() error {
 				sz = maxAllocSize - 1
 			}
 			buf := unsafeByteSlice(unsafe.Pointer(p), written, 0, int(sz))
-
+			// 写入buf（+offset）
 			if _, err := tx.db.ops.writeAt(buf, offset); err != nil {
 				return err
 			}
 
 			// Update statistics.
+			// 更新一些信息
 			tx.stats.Write++
 
 			// Exit inner for loop if we've written all the chunks.
@@ -601,13 +605,17 @@ func (tx *Tx) write() error {
 }
 
 // writeMeta writes the meta to the disk.
+// 写入 meta 信息到磁盘
 func (tx *Tx) writeMeta() error {
 	// Create a temporary buffer for the meta page.
+	// 创建一个临时buf
 	buf := make([]byte, tx.db.pageSize)
 	p := tx.db.pageInBuffer(buf, 0)
+	// 写入 meta 到一个 page 的 meta 信息地址
 	tx.meta.write(p)
 
 	// Write the meta page to file.
+	// 将 page 写入文件
 	if _, err := tx.db.ops.writeAt(buf, int64(p.id)*int64(tx.db.pageSize)); err != nil {
 		return err
 	}
