@@ -7,6 +7,8 @@ import (
 )
 
 const (
+	// 最大 key value 大小
+
 	// MaxKeySize is the maximum length of a key, in bytes.
 	MaxKeySize = 32768
 
@@ -26,18 +28,20 @@ const (
 const DefaultFillPercent = 0.5
 
 // Bucket represents a collection of key/value pairs inside the database.
+// Bucket 代表 key-value 的集合
 type Bucket struct {
+	// bucket 在文件中的表示
 	*bucket
 	// * 关联的事务
-	tx       *Tx                // the associated transaction
-	// * sub bucket
-	buckets  map[string]*Bucket // subbucket cache
+	tx *Tx // the associated transaction
+	// * sub bucket，之前使用过得 bucket 会存在这（缓存），方便下次查找（字典效率高呀）
+	buckets map[string]*Bucket // subbucket cache
 	// * 对应的的page
-	page     *page              // inline page reference
+	page *page // inline page reference
 	// * 根节点
-	rootNode *node              // materialized node for the root page.
+	rootNode *node // materialized node for the root page.
 	// * 包含的所有node
-	nodes    map[pgid]*node     // node cache
+	nodes map[pgid]*node // node cache
 
 	// Sets the threshold for filling nodes when they split. By default,
 	// the bucket will fill to 50% but it can be useful to increase this
@@ -52,9 +56,11 @@ type Bucket struct {
 // This is stored as the "value" of a bucket key. If the bucket is small enough,
 // then its root page can be stored inline in the "value", after the bucket
 // header. In the case of inline buckets, the "root" will be 0.
+// bucket 在文件中
 type bucket struct {
 	// * 树根节点
-	root     pgid   // page id of the bucket's root-level page
+	root pgid // page id of the bucket's root-level page
+	// 递增大小
 	sequence uint64 // monotonically incrementing, used by NextSequence()
 }
 
@@ -87,6 +93,7 @@ func (b *Bucket) Writable() bool {
 // Cursor creates a cursor associated with the bucket.
 // The cursor is only valid as long as the transaction is open.
 // Do not use a cursor after the transaction is closed.
+// 游标，定位 bucket 中的 kv pair
 func (b *Bucket) Cursor() *Cursor {
 	// Update transaction statistics.
 	b.tx.stats.CursorCount++
@@ -102,6 +109,14 @@ func (b *Bucket) Cursor() *Cursor {
 // Returns nil if the bucket does not exist.
 // The bucket instance is only valid for the lifetime of the transaction.
 // * 查询bucket
+/* db.View(func(tx *bolt.Tx) error {
+		b := tx.Bucket([]byte("MyBucket"))
+		v := b.Get([]byte("answer"))
+		fmt.Printf("The answer is: %s\n", v)
+		return nil
+ })
+*/
+
 func (b *Bucket) Bucket(name []byte) *Bucket {
 	if b.buckets != nil {
 		// * 看看子 bucket 有没有
@@ -111,8 +126,9 @@ func (b *Bucket) Bucket(name []byte) *Bucket {
 	}
 
 	// Move cursor to key.
+	// 移动游标，找到 对应的 bucket
 	c := b.Cursor()
-	// * 游标找到位置
+	// * 游标找到位置，k 代表 bucket, v==nil
 	k, v, flags := c.seek(name)
 
 	// Return nil if the key doesn't exist or it is not a bucket.
@@ -121,8 +137,9 @@ func (b *Bucket) Bucket(name []byte) *Bucket {
 	}
 
 	// Otherwise create a bucket and cache it.
-	// * 有的话，打开这个bucket
+	// * 有这个 bucket 的话，打开
 	var child = b.openBucket(v)
+	// 同时存入 bucket 列表中，下次就不用 seek 啦，直接在字典中找
 	if b.buckets != nil {
 		b.buckets[string(name)] = child
 	}
@@ -132,16 +149,18 @@ func (b *Bucket) Bucket(name []byte) *Bucket {
 
 // Helper method that re-interprets a sub-bucket value
 // from a parent into a Bucket
-// * 打开 Bucket
+// todo: ？打开 Bucket
 func (b *Bucket) openBucket(value []byte) *Bucket {
 	// * 新建一个bucket
 	var child = newBucket(b.tx)
 
 	// Unaligned access requires a copy to be made.
+	// Alignof 返回 bucket 和 page 需要对其的倍数
 	const unalignedMask = unsafe.Alignof(struct {
 		bucket
 		page
 	}{}) - 1
+	//
 	// ? 如果内存地址没对齐，复制value
 	unaligned := uintptr(unsafe.Pointer(&value[0]))&unalignedMask != 0
 	if unaligned {
@@ -150,6 +169,7 @@ func (b *Bucket) openBucket(value []byte) *Bucket {
 
 	// If this is a writable transaction then we need to copy the bucket entry.
 	// Read-only transactions can point directly at the mmap entry.
+	// 如果事务是可写的，复制该 bucket
 	if b.tx.writable && !unaligned {
 		child.bucket = &bucket{}
 		*child.bucket = *(*bucket)(unsafe.Pointer(&value[0]))
@@ -168,7 +188,18 @@ func (b *Bucket) openBucket(value []byte) *Bucket {
 // CreateBucket creates a new bucket at the given key and returns the new bucket.
 // Returns an error if the key already exists, if the bucket name is blank, or if the bucket name is too long.
 // The bucket instance is only valid for the lifetime of the transaction.
+/*
+db.Update(func(tx *bolt.Tx) error {
+	b, err := tx.CreateBucket([]byte("MyBucket"))
+	if err != nil {
+		return fmt.Errorf("create bucket: %s", err)
+	}
+	return nil
+})
+*/
+// CreateBucket 创建一个新的 bucket
 func (b *Bucket) CreateBucket(key []byte) (*Bucket, error) {
+	// 确保事务没有 close，且可写
 	if b.tx.db == nil {
 		return nil, ErrTxClosed
 	} else if !b.tx.writable {
@@ -178,10 +209,12 @@ func (b *Bucket) CreateBucket(key []byte) (*Bucket, error) {
 	}
 
 	// Move cursor to correct position.
+	// 移动游标，找找有没有这个 bucket
 	c := b.Cursor()
 	k, _, flags := c.seek(key)
 
 	// Return an error if there is an existing key.
+	// 如果该 bucket 已经存在，error
 	if bytes.Equal(key, k) {
 		if (flags & bucketLeafFlag) != 0 {
 			return nil, ErrBucketExists
@@ -190,6 +223,7 @@ func (b *Bucket) CreateBucket(key []byte) (*Bucket, error) {
 	}
 
 	// Create empty, inline bucket.
+	// 创建一个新的 bucket
 	var bucket = Bucket{
 		bucket:      &bucket{},
 		rootNode:    &node{isLeaf: true},
@@ -198,6 +232,7 @@ func (b *Bucket) CreateBucket(key []byte) (*Bucket, error) {
 	var value = bucket.write()
 
 	// Insert into node.
+	// 将该 bucket 存入 cursor
 	key = cloneBytes(key)
 	c.node().put(key, key, value, 0, bucketLeafFlag)
 
@@ -275,14 +310,17 @@ func (b *Bucket) DeleteBucket(key []byte) error {
 // The returned value is only valid for the life of the transaction.
 // * 从 bucket 获取 k-v
 func (b *Bucket) Get(key []byte) []byte {
+	// 游标 seek kv pair
 	k, v, flags := b.Cursor().seek(key)
 
 	// Return nil if this is a bucket.
+	// seek bucket 可不行的
 	if (flags & bucketLeafFlag) != 0 {
 		return nil
 	}
 
 	// If our target node isn't the same key as what's passed in then return nil.
+	// 没找对，error
 	if !bytes.Equal(key, k) {
 		return nil
 	}

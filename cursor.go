@@ -15,6 +15,8 @@ import (
 // Changing data while traversing with a cursor may cause it to be invalidated
 // and return unexpected keys and/or values. You must reposition your cursor
 // after mutating data.
+
+// 游标定位
 type Cursor struct {
 	bucket *Bucket
 	stack  []elemRef
@@ -151,6 +153,7 @@ func (c *Cursor) Delete() error {
 
 // seek moves the cursor to a given key and returns it.
 // If the key does not exist then the next key is used.
+// 可以 seek bucket 或者 bucket 中的 key-value
 func (c *Cursor) seek(seek []byte) (key []byte, value []byte, flags uint32) {
 	_assert(c.bucket.tx.db != nil, "tx closed")
 
@@ -159,6 +162,7 @@ func (c *Cursor) seek(seek []byte) (key []byte, value []byte, flags uint32) {
 	c.search(seek, c.bucket.root)
 
 	// If this is a bucket then return a nil value.
+	// 如果 seek 的是个 bucket，返回 nil value
 	return c.keyValue()
 }
 
@@ -373,6 +377,7 @@ func (c *Cursor) node() *node {
 }
 
 // elemRef represents a reference to an element on a given page/node.
+// page node 的位置
 type elemRef struct {
 	page  *page
 	node  *node
