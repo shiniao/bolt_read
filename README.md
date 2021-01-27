@@ -10,6 +10,10 @@ bbolt
 
 boltdb 数据库阅读笔记
 
+### bucket
+bucket 代表键值对的集合
+### cursor
+
 ---
 
 bbolt is a fork of [Ben Johnson's][gh_ben] [Bolt][bolt] key/value
